@@ -246,6 +246,8 @@ class RepoScanner:
                 sym_a, sym_b = candidates[i], candidates[j]
                 if sym_a.file_path == sym_b.file_path and sym_a.symbol_name == sym_b.symbol_name:
                     continue
+                if sym_a.symbol_name == "__init__" or sym_b.symbol_name == "__init__":
+                    continue
                 pair_key = tuple(sorted([f"{sym_a.file_path}:{sym_a.symbol_name}", f"{sym_b.file_path}:{sym_b.symbol_name}"]))
                 if pair_key in reported_clones:
                     continue
@@ -271,9 +273,36 @@ class RepoScanner:
                     )
 
         combined_source = "\n".join(file_sources.values()) + "\n" + test_corpus
+        all_exports: set[str] = set()
+        for ftext in file_sources.values():
+            for m in re.finditer(r"__all__\s*=\s*\[([^\]]+)\]", ftext):
+                for name in re.findall(r"['\"]([^'\"]+)['\"]", m.group(1)):
+                    all_exports.add(name)
+
         for sym in all_symbols:
             if sym.symbol_name.startswith("_") or sym.symbol_name in ("main", "app", "cli", "run", "init"):
                 continue
+            if sym.symbol_name in all_exports:
+                continue
+
+            # Skip framework-dispatched entry points (e.g. @app.command(), @router, etc.)
+            source_lines = file_sources.get(sym.file_path, "").splitlines()
+            idx = sym.start_line - 2
+            is_entrypoint = False
+            while idx >= 0:
+                line_str = source_lines[idx].strip()
+                if line_str.startswith("@"):
+                    if any(fw in line_str for fw in ("app.", "router.", "route", "command", "click.", "pytest.")):
+                        is_entrypoint = True
+                        break
+                    idx -= 1
+                elif not line_str:
+                    idx -= 1
+                else:
+                    break
+            if is_entrypoint:
+                continue
+
             occurrences = len(re.findall(rf"\b{re.escape(sym.symbol_name)}\b", combined_source))
             if occurrences <= 1:
                 is_act, conf, rec = classifier.classify_finding(

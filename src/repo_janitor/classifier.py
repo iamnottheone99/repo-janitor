@@ -143,19 +143,20 @@ class KevDecisionClassifier:
 
 
 def tokenize_code(source: str) -> list[str]:
-    """Normalize code into structural tokens (AST nodes or normalized keywords/operators) for clone detection."""
-    try:
-        tree = ast.parse(source)
-        return [type(node).__name__ for node in ast.walk(tree)]
-    except Exception:
-        keywords = {
-            "def", "class", "return", "if", "else", "elif", "for", "while", "try", "except", "finally",
-            "with", "import", "from", "as", "async", "await", "function", "export", "let", "const", "var",
-            "func", "fn", "pub", "struct", "enum", "type", "interface", "package", "range", "match", "switch", "case"
-        }
-        no_comments = re.sub(r"#.*$|//.*$|/\*[\s\S]*?\*/|'{3}[\s\S]*?'{3}|\"{3}[\s\S]*?\"{3}", "", source, flags=re.MULTILINE)
-        raw_tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[+\-*/%=<>!&|^~]+", no_comments)
-        return [tok.lower() if tok.lower() in keywords or not tok.isalnum() else "ID" for tok in raw_tokens]
+    """Normalize code into structural tokens (keywords, operators, and ID literals) for clone detection."""
+    keywords = {
+        "def", "class", "return", "if", "else", "elif", "for", "while", "try", "except", "finally",
+        "with", "import", "from", "as", "async", "await", "function", "export", "let", "const", "var",
+        "func", "fn", "pub", "struct", "enum", "type", "interface", "package", "range", "match", "switch", "case"
+    }
+    no_comments = re.sub(r"#.*$|//.*$|/\*[\s\S]*?\*/|'{3}[\s\S]*?'{3}|\"{3}[\s\S]*?\"{3}", "", source, flags=re.MULTILINE)
+    raw_tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[+\-*/%=<>!&|^~]+", no_comments)
+    return [
+        tok.lower()
+        if tok.lower() in keywords
+        else ("ID" if tok.isidentifier() else tok)
+        for tok in raw_tokens
+    ]
 
 
 def compute_token_fingerprint(tokens: list[str]) -> set[str]:

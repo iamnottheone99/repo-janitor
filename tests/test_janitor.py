@@ -329,3 +329,58 @@ def test_audit_identifies_errors_gaps_and_redundancies(tmp_path: Path) -> None:
     assert "calculate_total" in clone.title or "compute_sum" in clone.title
 
 
+def test_worktree_run_tests_catches_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify GitWorktreeManager.run_tests gracefully catches TimeoutExpired without crashing."""
+    import subprocess
+    from repo_janitor.worktree import GitWorktreeManager
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    Repo.init(repo_dir)
+
+    manager = GitWorktreeManager(repo_dir)
+
+    def fake_subprocess_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="pytest", timeout=120)
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    result = manager.run_tests(repo_dir)
+
+    assert result.passed is False
+    assert result.exit_code == -1
+    assert "timed out after 120s" in result.stderr
+
+
+def test_dead_code_ignores_framework_entrypoints_and_all_exports(tmp_path: Path) -> None:
+    """Verify functions decorated with @app.command() or exported in __all__ are not marked dead code."""
+    repo_dir = tmp_path / "app_repo"
+    repo_dir.mkdir()
+    Repo.init(repo_dir)
+
+    src = repo_dir / "src"
+    src.mkdir()
+    (src / "cli.py").write_text(
+        "import typer\n\n"
+        "app = typer.Typer()\n\n"
+        "@app.command()\n"
+        "def launch():\n"
+        "    print('Launched')\n",
+        encoding="utf-8",
+    )
+    (src / "lib.py").write_text(
+        "__all__ = ['public_helper']\n\n"
+        "def public_helper():\n"
+        "    return 42\n",
+        encoding="utf-8",
+    )
+
+    cfg = JanitorConfig(source_dirs=["src"])
+    scanner = RepoScanner(repo_dir, cfg)
+    audit_report = scanner.audit()
+
+    dead_symbols = [f.title for f in audit_report.redundancies if f.kind == "dead_code"]
+    assert not any("launch" in s for s in dead_symbols)
+    assert not any("public_helper" in s for s in dead_symbols)
+
+
+

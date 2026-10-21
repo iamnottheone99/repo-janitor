@@ -133,21 +133,31 @@ class GitWorktreeManager:
         if cmd.startswith("pytest"):
             cmd = f'"{sys.executable}" -m {cmd}'
 
-        proc = subprocess.run(
-            cmd,
-            cwd=str(worktree_path),
-            env=env,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return VerificationResult(
-            passed=(proc.returncode == 0),
-            exit_code=proc.returncode,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=str(worktree_path),
+                env=env,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            return VerificationResult(
+                passed=(proc.returncode == 0),
+                exit_code=proc.returncode,
+                stdout=proc.stdout,
+                stderr=proc.stderr,
+            )
+        except subprocess.TimeoutExpired as exc:
+            out = exc.stdout.decode("utf-8", errors="ignore") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            err = exc.stderr.decode("utf-8", errors="ignore") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            return VerificationResult(
+                passed=False,
+                exit_code=-1,
+                stdout=out,
+                stderr=f"Test run timed out after 120s: {err}",
+            )
 
     def commit_changes(
         self, worktree_path: Path, files: list[str], message: str

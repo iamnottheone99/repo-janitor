@@ -22,6 +22,15 @@ const proc = spawn(py, args, {
   },
 });
 
+proc.on('error', (err) => {
+  if (err.code === 'ENOENT') {
+    console.error(`repo-janitor: "${py}" was not found in PATH. Python 3.10+ is required.`);
+  } else {
+    console.error(`repo-janitor: failed to start process: ${err.message}`);
+  }
+  process.exit(1);
+});
+
 proc.on('exit', (code) => {
   process.exit(code ?? 0);
 });
