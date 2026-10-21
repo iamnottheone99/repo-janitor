@@ -383,4 +383,87 @@ def test_dead_code_ignores_framework_entrypoints_and_all_exports(tmp_path: Path)
     assert not any("public_helper" in s for s in dead_symbols)
 
 
+def test_cli_commands_and_toon_flag(sample_git_repo: Path) -> None:
+    """Verify Typer CLI commands execute cleanly and emit TOON output."""
+    from typer.testing import CliRunner
+    from repo_janitor.cli import app
+
+    runner = CliRunner()
+
+    help_res = runner.invoke(app, ["--help"])
+    assert help_res.exit_code == 0
+    assert "Autonomous local Ollama-powered repository maintainer" in help_res.output
+
+    check_res = runner.invoke(app, ["check", "--repo", str(sample_git_repo), "--toon"])
+    assert check_res.exit_code == 0
+    assert "summary:" in check_res.output
+    assert "gaps" in check_res.output
+
+    scan_res = runner.invoke(app, ["scan", "--repo", str(sample_git_repo), "--toon"])
+    assert scan_res.exit_code == 0
+    assert "untested_functions" in scan_res.output
+
+
+def test_go_adapter_symbols_and_test_detection() -> None:
+    """Verify GoAdapter extracts exported functions/structs and detects _test.go files."""
+    from repo_janitor.languages import get_language_adapter
+
+    adapter = get_language_adapter("go")
+    assert adapter.is_test_file(Path("math_test.go"), ("math_test.go",), "tests") is True
+    assert adapter.is_test_file(Path("math.go"), ("math.go",), "tests") is False
+
+    go_code = (
+        "package calc\n\n"
+        "type Engine struct {\n"
+        "    Factor int\n"
+        "}\n\n"
+        "func Add(a int, b int) int {\n"
+        "    return a + b\n"
+        "}\n"
+    )
+    symbols = adapter.parse_symbols(go_code, "calc/math.go", "", {})
+    names = {s.symbol_name for s in symbols}
+    assert "Add" in names
+    assert "Engine" in names
+
+
+def test_rust_adapter_symbols_and_test_detection() -> None:
+    """Verify RustAdapter extracts pub fn / structs and detects test files."""
+    from repo_janitor.languages import get_language_adapter
+
+    adapter = get_language_adapter("rust")
+    assert adapter.is_test_file(Path("lib_test.rs"), ("lib_test.rs",), "tests") is True
+    assert adapter.is_test_file(Path("lib.rs"), ("lib.rs",), "tests") is False
+
+    rust_code = (
+        "pub struct Config {\n"
+        "    pub port: u16,\n"
+        "}\n\n"
+        "pub fn start_server(cfg: &Config) -> bool {\n"
+        "    true\n"
+        "}\n"
+    )
+    symbols = adapter.parse_symbols(rust_code, "src/lib.rs", "", {})
+    names = {s.symbol_name for s in symbols}
+    assert "start_server" in names
+    assert "Config" in names
+
+
+def test_brace_matcher_ignores_braces_in_string_literals() -> None:
+    """Verify _find_matching_brace_end does not prematurely close on braces in string literals."""
+    from repo_janitor.languages import _find_matching_brace_end
+
+    lines = [
+        "export function formatJson() {",
+        "    const close = '}';",
+        "    const template = `outer { inner }`;",
+        "    return close + template;",
+        "}",
+        "export function nextFn() {}",
+    ]
+    end_line = _find_matching_brace_end(lines, 0)
+    assert end_line == 5
+
+
+
 

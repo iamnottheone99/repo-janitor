@@ -49,7 +49,7 @@ class OllamaClient:
             req = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(req, timeout=3.0) as resp:
                 return resp.status == 200
-        except Exception:
+        except (urllib.error.URLError, TimeoutError, OSError):
             return False
 
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
@@ -69,13 +69,9 @@ class OllamaClient:
             if isinstance(response, dict):
                 return response.get("message", {}).get("content", "")
             return getattr(response.message, "content", "")
-        except ImportError:
-            pass
         except Exception as exc:
-            # Fallback to direct HTTP request if SDK call fails
+            # Fallback to direct HTTP request if SDK call or import fails
             return self._http_chat(system_prompt, user_prompt, prev_exc=exc)
-
-        return self._http_chat(system_prompt, user_prompt)
 
     def _http_chat(
         self, system_prompt: str, user_prompt: str, prev_exc: Exception | None = None

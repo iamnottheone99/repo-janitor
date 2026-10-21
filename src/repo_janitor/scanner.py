@@ -207,8 +207,12 @@ class RepoScanner:
                         Finding("error", "syntax_error", f"Syntax error: {syn_err.msg}", rel_path, syn_err.lineno or 1, conf, is_act, rec)
                     )
                     continue
-                except Exception:
-                    pass
+                except Exception as exc:
+                    is_act, conf, rec = classifier.classify_finding("error", "syntax_error", rel_path, src_file.name, str(exc))
+                    audit_rep.errors.append(
+                        Finding("error", "syntax_error", f"Parse error: {exc}", rel_path, 1, conf, is_act, rec)
+                    )
+                    continue
 
             symbols = self._parse_file(src_file, rel_path, test_corpus, coverage_map)
             all_symbols.extend(symbols)
@@ -237,7 +241,13 @@ class RepoScanner:
         # 3. Redundancies: Code clones & dead code
         min_lines = getattr(self.config, "min_clone_lines", 3)
         thresh = getattr(self.config, "similarity_threshold", 0.85)
-        candidates = [s for s in all_symbols if (s.end_line - s.start_line + 1) >= min_lines and s.kind in ("function", "method")]
+        candidates = [
+            s for s in all_symbols
+            if (s.end_line - s.start_line + 1) >= min_lines
+            and s.kind in ("function", "method")
+            and not s.source_code.strip().endswith("...")
+            and not s.source_code.strip().endswith("pass")
+        ]
         fingerprints = [compute_token_fingerprint(tokenize_code(s.source_code)) for s in candidates]
 
         reported_clones: set[tuple[str, str]] = set()
@@ -375,7 +385,7 @@ class RepoScanner:
                 for fpath, info in data.get("files", {}).items():
                     norm = Path(fpath).as_posix()
                     result[norm] = set(info.get("executed_lines", []))
-            except Exception:
+            except (json.JSONDecodeError, OSError, KeyError):
                 pass
 
         # 2. LCOV (TypeScript/JS Vitest/Jest, Rust cargo-llvm-cov, etc.)
@@ -396,7 +406,7 @@ class RepoScanner:
                             parts = line[3:].split(",")
                             if len(parts) >= 2 and int(parts[1]) > 0:
                                 result[current_file].add(int(parts[0]))
-                except Exception:
+                except (ValueError, OSError):
                     pass
 
         # 3. Go coverprofile (cover.out / coverage.out)
@@ -421,7 +431,7 @@ class RepoScanner:
                                         range(start_ln, end_ln + 1)
                                     )
                                     break
-                except Exception:
+                except (ValueError, OSError):
                     pass
 
         return result

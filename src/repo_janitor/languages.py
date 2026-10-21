@@ -78,9 +78,10 @@ def _find_matching_brace_end(lines: list[str], start_idx: int) -> int:
     """Find the 1-indexed closing line for a brace-delimited block starting at start_idx."""
     depth = 0
     opened = False
+    str_and_comment_re = re.compile(r'//.*$|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|`(?:\\.|[^`\\])*`')
     for idx in range(start_idx, len(lines)):
-        line = re.sub(r"//.*$", "", lines[idx])
-        for ch in line:
+        cleaned_line = str_and_comment_re.sub("", lines[idx])
+        for ch in cleaned_line:
             if ch == "{":
                 depth += 1
                 opened = True

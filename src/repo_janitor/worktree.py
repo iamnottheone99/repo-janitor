@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterator
 
 from git import Repo
+from git.exc import GitError
 
 from repo_janitor.config import JanitorConfig
 
@@ -185,16 +186,16 @@ class GitWorktreeManager:
             self._unlink_shared_dependencies(wt_path)
             try:
                 self.repo.git.worktree("remove", "--force", str(wt_path))
-            except Exception:
+            except GitError:
                 shutil.rmtree(wt_path, ignore_errors=True)
                 try:
                     self.repo.git.worktree("prune")
-                except Exception:
+                except (GitError, OSError):
                     pass
 
     def _delete_branch_if_exists(self, branch_name: str) -> None:
         if branch_name in [h.name for h in self.repo.heads]:
             try:
                 self.repo.git.branch("-D", branch_name)
-            except Exception:
+            except (GitError, OSError):
                 pass
