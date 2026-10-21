@@ -377,8 +377,11 @@ class TypeScriptJSAdapter(LanguageAdapter):
         return "".join(lines)
 
     def derive_import_target(self, rel_path: str) -> str:
+        import os
+
         no_ext = Path(rel_path).with_suffix("").as_posix()
-        return f"../{no_ext}"
+        rel = os.path.relpath(no_ext, "tests").replace("\\", "/")
+        return rel if rel.startswith(".") else f"./{rel}"
 
     def generated_test_rel_path(self, sym: CodeSymbol, slug: str, tests_dir: str) -> str:
         ext = ".ts" if sym.file_path.endswith((".ts", ".tsx")) else ".js"

@@ -329,8 +329,10 @@ class RepoScanner:
         found: list[Path] = []
         seen: set[Path] = set()
         allowed_exts = self._allowed_extensions()
+        # If repo root '.' is included, a single root traversal visits all files without redundant passes
+        effective_dirs = ["."] if "." in self.config.source_dirs else self.config.source_dirs
 
-        for src_dir_name in self.config.source_dirs:
+        for src_dir_name in effective_dirs:
             base = (self.repo_root / src_dir_name).resolve()
             if not base.exists():
                 continue

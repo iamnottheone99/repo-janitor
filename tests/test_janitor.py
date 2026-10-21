@@ -449,6 +449,34 @@ def test_rust_adapter_symbols_and_test_detection() -> None:
     assert "Config" in names
 
 
+def test_typescript_derive_import_target_various_depths() -> None:
+    """Verify TypeScriptJSAdapter computes clean relative imports for root and nested files."""
+    from repo_janitor.languages import get_language_adapter
+
+    adapter = get_language_adapter("typescript")
+    assert adapter.derive_import_target("src/utils/math.ts") == "../src/utils/math"
+    assert adapter.derive_import_target("index.ts") == "../index"
+    assert adapter.derive_import_target("tests/fixtures.ts") == "./fixtures"
+
+
+def test_discover_source_files_avoids_redundant_walks(tmp_path: Path) -> None:
+    """Verify RepoScanner._discover_source_files works with combined src and root configurations."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    (repo / "src" / "main.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "setup.py").write_text("# setup\n", encoding="utf-8")
+
+    cfg = JanitorConfig(source_dirs=["src", "."])
+    scanner = RepoScanner(repo, cfg)
+    files = [f.name for f in scanner._discover_source_files()]
+
+    assert "main.py" in files
+    assert "setup.py" in files
+    assert len(files) == 2
+
+
+
 def test_brace_matcher_ignores_braces_in_string_literals() -> None:
     """Verify _find_matching_brace_end does not prematurely close on braces in string literals."""
     from repo_janitor.languages import _find_matching_brace_end
