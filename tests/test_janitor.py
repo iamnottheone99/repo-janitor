@@ -153,3 +153,179 @@ def test_maintainer_discards_branch_when_verification_fails(
     assert summary.committed_count == 0
     assert summary.failed_count == 1
     assert maintainer.worktrees.list_janitor_branches() == []
+
+
+def test_multilanguage_doc_injection_ts_go_rust() -> None:
+    """Verify JSDoc, GoDoc, and Rustdoc injection via LanguageAdapter."""
+    ts_src = "export function multiply(a: number, b: number): number {\n  return a * b;\n}\n"
+    ts_out = inject_docstring_into_source(
+        ts_src, "multiply", "multiply", "Multiply two numbers.", language="typescript"
+    )
+    assert "/** Multiply two numbers. */" in ts_out
+    assert "export function multiply" in ts_out
+
+    go_src = "package calc\n\nfunc Multiply(a int, b int) int {\n\treturn a * b\n}\n"
+    go_out = inject_docstring_into_source(
+        go_src, "Multiply", "Multiply", "Multiply returns the product of a and b.", language="go"
+    )
+    assert "// Multiply returns the product of a and b." in go_out
+
+    rs_src = "#[inline]\npub fn multiply(a: i32, b: i32) -> i32 {\n    a * b\n}\n"
+    rs_out = inject_docstring_into_source(
+        rs_src, "multiply", "multiply", "Computes the product of two integers.", language="rust"
+    )
+    # Rustdoc should be placed above #[inline]
+    assert rs_out.index("/// Computes the product of two integers.") < rs_out.index("#[inline]")
+
+
+def test_typescript_repo_scan_and_isolated_worktree_maintenance(tmp_path: Path) -> None:
+    """Verify scanning, JSDoc injection, LCOV coverage, and test generation in a TypeScript/JS repo."""
+    repo_dir = tmp_path / "ts_repo"
+    repo_dir.mkdir()
+    repo = Repo.init(repo_dir)
+    with repo.config_writer() as cw:
+        cw.set_value("user", "name", "Test Bot")
+        cw.set_value("user", "email", "bot@example.com")
+
+    (repo_dir / "tsconfig.json").write_text("{}\n", encoding="utf-8")
+    src_dir = repo_dir / "src"
+    src_dir.mkdir()
+    (src_dir / "string_utils.ts").write_text(
+        "export function capitalize(input: string): string {\n"
+        "  return input.charAt(0).toUpperCase() + input.slice(1);\n"
+        "}\n\n"
+        "/** Already documented helper. */\n"
+        "export const coveredFn = (x: number) => {\n"
+        "  return x + 1;\n"
+        "};\n",
+        encoding="utf-8",
+    )
+    # Write LCOV marking lines 6-8 (coveredFn) as covered, leaving capitalize (1-3) uncovered
+    (repo_dir / "lcov.info").write_text(
+        "SF:src/string_utils.ts\n"
+        "DA:2,0\n"
+        "DA:7,3\n"
+        "end_of_record\n",
+        encoding="utf-8",
+    )
+    (repo_dir / "README.md").write_text("# TS Repo\n", encoding="utf-8")
+
+    repo.index.add(["tsconfig.json", "src/string_utils.ts", "lcov.info", "README.md"])
+    repo.index.commit("Initial TS commit")
+
+    # Use python -c "import sys; sys.exit(0)" as a portable fast verification gate in the test
+    cfg = JanitorConfig(language="typescript", test_command='python -c "import sys; sys.exit(0)"')
+    scanner = RepoScanner(repo_dir, cfg)
+    report = scanner.scan()
+
+    assert report.total_files == 1
+    assert [s.qualified_name for s in report.missing_docstrings] == ["capitalize"]
+    assert [s.qualified_name for s in report.untested_functions] == ["capitalize"]
+
+    class FakeTSLLM(FakeOllamaLLM):
+        def generate_unit_test(
+            self,
+            symbol: CodeSymbol,
+            module_import_path: str,
+            full_file_source: str,
+            previous_error: str | None = None,
+        ) -> str:
+            return (
+                f"import {{ {symbol.symbol_name} }} from '{module_import_path}';\n"
+                f"// Verified test for {symbol.qualified_name}\n"
+            )
+
+    maintainer = RepoMaintainer(repo_dir, config=cfg, llm=FakeTSLLM())
+    summary = maintainer.run_all()
+    assert summary.committed_count == 3
+
+    branches = {b["branch"] for b in maintainer.worktrees.list_janitor_branches()}
+    assert "janitor/docs/string_utils" in branches
+    assert "janitor/tests/string_utils-capitalize" in branches
+
+
+def test_audit_identifies_errors_gaps_and_redundancies(tmp_path: Path) -> None:
+    """Verify RepoScanner.audit identifies Errors, Gaps, and Redundancies with classifier metadata."""
+    repo_dir = tmp_path / "audit_repo"
+    repo_dir.mkdir()
+    repo = Repo.init(repo_dir)
+
+    src_dir = repo_dir / "src" / "pkg"
+    src_dir.mkdir(parents=True)
+
+    # 1. Error: empty exception & broken internal import
+    (src_dir / "faulty.py").write_text(
+        "from pkg.missing_module import phantom\n\n"
+        "def risky():\n"
+        "    try:\n"
+        "        x = 1 / 0\n"
+        "    except Exception:\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+
+    # 2. Gap: unfinished stub
+    (src_dir / "stubs.py").write_text(
+        "def pending_feature(x: int) -> int:\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+
+    # 3. Redundancy: Near-identical clone & dead code
+    (src_dir / "clone1.py").write_text(
+        "def calculate_total(items: list[int]) -> int:\n"
+        "    total = 0\n"
+        "    for item in items:\n"
+        "        total += item\n"
+        "    return total\n",
+        encoding="utf-8",
+    )
+    (src_dir / "clone2.py").write_text(
+        "def compute_sum(values: list[int]) -> int:\n"
+        "    total = 0\n"
+        "    for value in values:\n"
+        "        total += value\n"
+        "    return total\n",
+        encoding="utf-8",
+    )
+    (repo_dir / "README.md").write_text("# Audit Repo\n", encoding="utf-8")
+
+    repo.index.add([
+        "src/pkg/faulty.py",
+        "src/pkg/stubs.py",
+        "src/pkg/clone1.py",
+        "src/pkg/clone2.py",
+        "README.md",
+    ])
+    repo.index.commit("Initial audit commit")
+
+    cfg = JanitorConfig(source_dirs=["src"], similarity_threshold=0.80)
+    scanner = RepoScanner(repo_dir, cfg)
+    audit_report = scanner.audit()
+
+    assert audit_report.total_files == 4
+
+    # Verify Errors
+    error_kinds = {e.kind for e in audit_report.errors}
+    assert "empty_exception" in error_kinds
+    assert "broken_import" in error_kinds
+    for err in audit_report.errors:
+        assert err.category == "error"
+        assert err.confidence >= 0.85
+        assert err.is_actionable is True
+        assert len(err.recommendation) > 5
+
+    # Verify Gaps
+    gap_kinds = {g.kind for g in audit_report.gaps}
+    assert "stub_function" in gap_kinds
+    stub = next(g for g in audit_report.gaps if g.kind == "stub_function")
+    assert "pending_feature" in stub.title
+
+    # Verify Redundancies (clone detected between clone1 and clone2)
+    red_kinds = {r.kind for r in audit_report.redundancies}
+    assert "code_clone" in red_kinds
+    clone = next(r for r in audit_report.redundancies if r.kind == "code_clone")
+    assert clone.related_file is not None
+    assert "calculate_total" in clone.title or "compute_sum" in clone.title
+
+

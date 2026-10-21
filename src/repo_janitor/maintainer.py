@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from repo_janitor.config import JanitorConfig
+from repo_janitor.languages import get_language_adapter
 from repo_janitor.ollama_client import LLMGenerator, OllamaClient
 from repo_janitor.scanner import CodeSymbol, RepoScanner, ScanReport
 from repo_janitor.worktree import GitWorktreeManager
@@ -43,52 +44,15 @@ class MaintenanceSummary:
 
 
 def inject_docstring_into_source(
-    source: str, symbol_name: str, qualified_name: str, docstring: str
+    source: str,
+    symbol_name: str,
+    qualified_name: str,
+    docstring: str,
+    language: str = "python",
 ) -> str:
-    """Safely insert a docstring into the target function, method, or class body."""
-    tree = ast.parse(source)
-    target_node: ast.AST | None = None
-
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if node.name == qualified_name:
-                target_node = node
-                break
-            if isinstance(node, ast.ClassDef):
-                for child in node.body:
-                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        if f"{node.name}.{child.name}" == qualified_name:
-                            target_node = child
-                            break
-
-    if target_node is None or not getattr(target_node, "body", None):
-        raise ValueError(f"Symbol {qualified_name} not found in AST")
-
-    if ast.get_docstring(target_node) is not None:
-        return source
-
-    lines = source.splitlines(keepends=True)
-    first_stmt = target_node.body[0]  # type: ignore[attr-defined]
-    insert_idx = first_stmt.lineno - 1
-
-    # Match indentation of the first statement in the body
-    stmt_line = lines[insert_idx]
-    indent_len = len(stmt_line) - len(stmt_line.lstrip(" \t"))
-    indent = stmt_line[:indent_len] or "    "
-
-    clean_doc = docstring.strip().replace('"""', "'''")
-    doc_lines = clean_doc.splitlines()
-    if len(doc_lines) == 1:
-        formatted_doc = f'{indent}"""{doc_lines[0]}"""\n'
-    else:
-        inner = "\n".join(f"{indent}{line}" if line.strip() else "" for line in doc_lines)
-        formatted_doc = f'{indent}"""\n{inner}\n{indent}"""\n'
-
-    lines.insert(insert_idx, formatted_doc)
-    updated = "".join(lines)
-    # Validate resulting Python syntax before writing
-    ast.parse(updated)
-    return updated
+    """Safely insert a docstring or doc comment into the target function, method, or class."""
+    adapter = get_language_adapter(language)
+    return adapter.inject_docstring(source, symbol_name, qualified_name, docstring)
 
 
 class RepoMaintainer:
@@ -173,12 +137,15 @@ class RepoMaintainer:
                 target_file = wt_path / rel_path
                 source = target_file.read_text(encoding="utf-8")
 
-                # Inject bottom-up or re-parse each time via inject_docstring_into_source
                 documented_names: list[str] = []
                 for sym in symbols:
                     doc = self.llm.generate_docstring(sym)
                     source = inject_docstring_into_source(
-                        source, sym.symbol_name, sym.qualified_name, doc
+                        source,
+                        sym.symbol_name,
+                        sym.qualified_name,
+                        doc,
+                        language=sym.language,
                     )
                     documented_names.append(sym.qualified_name)
 
@@ -232,9 +199,9 @@ class RepoMaintainer:
                     else f"# {self.repo_root.name}\n"
                 )
                 summaries: dict[str, str] = {}
-                for py_file in self.scanner._discover_source_files():
-                    rel = py_file.relative_to(self.repo_root).as_posix()
-                    summaries[py_file.stem] = f"Source module at `{rel}`"
+                for src_file in self.scanner._discover_source_files():
+                    rel = src_file.relative_to(self.repo_root).as_posix()
+                    summaries[src_file.stem] = f"Source module at `{rel}`"
 
                 updated_md = self.llm.generate_readme_section(
                     existing, report.readme_missing_modules, summaries
@@ -278,9 +245,10 @@ class RepoMaintainer:
             )
 
     def _process_unit_test(self, sym: CodeSymbol) -> TaskOutcome:
-        module_import = self._derive_module_import(sym.file_path)
+        adapter = get_language_adapter(sym.language)
+        module_import = adapter.derive_import_target(sym.file_path)
         slug = f"{Path(sym.file_path).stem}-{sym.qualified_name.replace('.', '-')}"
-        test_rel_path = f"{self.config.tests_dir}/test_janitor_{slug.replace('-', '_')}.py"
+        test_rel_path = adapter.generated_test_rel_path(sym, slug, self.config.tests_dir)
 
         try:
             with self.worktrees.isolated_worktree("tests", slug) as (wt_path, branch):
@@ -315,7 +283,7 @@ class RepoMaintainer:
                             branch=branch,
                             commit_sha=sha,
                             attempts=attempt,
-                            detail=f"Generated passing pytest suite in {test_rel_path}",
+                            detail=f"Generated passing {adapter.test_framework} suite in {test_rel_path}",
                         )
                     last_error = verification.combined_output
 
@@ -343,9 +311,4 @@ class RepoMaintainer:
     @staticmethod
     def _derive_module_import(rel_path: str) -> str:
         """Convert `src/pkg/mod.py` or `pkg/mod.py` into `pkg.mod`."""
-        parts = list(Path(rel_path).with_suffix("").parts)
-        if parts and parts[0] == "src":
-            parts = parts[1:]
-        if parts and parts[-1] == "__init__":
-            parts = parts[:-1]
-        return ".".join(parts)
+        return get_language_adapter("python").derive_import_target(rel_path)

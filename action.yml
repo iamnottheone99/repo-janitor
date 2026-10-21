@@ -1,0 +1,59 @@
+name: 'Repo Janitor Codebase Intelligence'
+description: 'Autonomous repository auditor and hygiene maintainer: checks Errors, Gaps, and Redundancies across Python, TypeScript/JS, Go, and Rust.'
+author: 'ashmi'
+branding:
+  icon: 'shield-check'
+  color: 'blue'
+
+inputs:
+  command:
+    description: 'Command to run (check, audit, scan, docstrings, or tests)'
+    required: false
+    default: 'check'
+  classifier:
+    description: 'Classifier model to use (fast, kev, or ollama)'
+    required: false
+    default: 'fast'
+  language:
+    description: 'Filter analysis to a specific language (auto, python, typescript, go, rust)'
+    required: false
+    default: 'auto'
+  strict:
+    description: 'Fail the GitHub Actions workflow step if errors are detected'
+    required: false
+    default: 'false'
+  format:
+    description: 'Output format (table or toon)'
+    required: false
+    default: 'table'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install Repo Janitor
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install "${{ github.action_path }}"
+
+    - name: Run Repo Janitor
+      shell: bash
+      run: |
+        EXTRA_FLAGS=""
+        if [ "${{ inputs.format }}" = "toon" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --toon"
+        fi
+        if [ "${{ inputs.language }}" != "auto" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --language ${{ inputs.language }}"
+        fi
+        if [ "${{ inputs.strict }}" = "true" ]; then
+          EXTRA_FLAGS="$EXTRA_FLAGS --strict"
+        fi
+
+        janitor ${{ inputs.command }} --classifier ${{ inputs.classifier }} $EXTRA_FLAGS

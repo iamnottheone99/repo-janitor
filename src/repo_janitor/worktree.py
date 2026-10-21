@@ -78,6 +78,7 @@ class GitWorktreeManager:
         self._delete_branch_if_exists(branch_name)
 
         self.repo.git.worktree("add", "-b", branch_name, str(wt_path), "HEAD")
+        self._link_shared_dependencies(wt_path)
         keep_branch = False
         try:
             yield wt_path, branch_name
@@ -90,8 +91,35 @@ class GitWorktreeManager:
             if not keep_branch:
                 self._delete_branch_if_exists(branch_name)
 
+    def _link_shared_dependencies(self, worktree_path: Path) -> None:
+        """Link heavy dependency folders (e.g. node_modules) into the isolated worktree."""
+        host_nm = self.repo_root / "node_modules"
+        wt_nm = worktree_path / "node_modules"
+        if host_nm.exists() and not wt_nm.exists():
+            try:
+                os.symlink(host_nm, wt_nm, target_is_directory=True)
+            except OSError:
+                if sys.platform == "win32":
+                    subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(wt_nm), str(host_nm)],
+                        capture_output=True,
+                        check=False,
+                    )
+
+    def _unlink_shared_dependencies(self, worktree_path: Path) -> None:
+        """Safely detach linked node_modules before deleting the worktree directory."""
+        wt_nm = worktree_path / "node_modules"
+        if wt_nm.is_symlink():
+            wt_nm.unlink(missing_ok=True)
+        elif wt_nm.exists() and sys.platform == "win32":
+            subprocess.run(
+                ["cmd", "/c", "rmdir", str(wt_nm)],
+                capture_output=True,
+                check=False,
+            )
+
     def run_tests(self, worktree_path: Path) -> VerificationResult:
-        """Execute the configured test suite inside the isolated worktree."""
+        """Execute the configured or auto-detected test suite inside the isolated worktree."""
         env = os.environ.copy()
         src_dir = worktree_path / "src"
         py_paths = [str(src_dir), str(worktree_path)] if src_dir.exists() else [str(worktree_path)]
@@ -100,7 +128,7 @@ class GitWorktreeManager:
             py_paths.append(existing_py_path)
         env["PYTHONPATH"] = os.pathsep.join(py_paths)
 
-        cmd = self.config.test_command
+        cmd = self.config.effective_test_command(worktree_path)
         # Ensure pytest runs under the active Python interpreter for reliability
         if cmd.startswith("pytest"):
             cmd = f'"{sys.executable}" -m {cmd}'
@@ -144,6 +172,7 @@ class GitWorktreeManager:
 
     def _cleanup_worktree(self, wt_path: Path) -> None:
         if wt_path.exists():
+            self._unlink_shared_dependencies(wt_path)
             try:
                 self.repo.git.worktree("remove", "--force", str(wt_path))
             except Exception:

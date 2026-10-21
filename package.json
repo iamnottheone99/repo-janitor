@@ -1,0 +1,21 @@
+{
+  "name": "repo-janitor",
+  "version": "0.1.0",
+  "description": "Codebase hygiene auditor & autonomous maintainer for Python, TypeScript/JS, Go, and Rust",
+  "type": "module",
+  "bin": {
+    "repo-janitor": "./bin/repo-janitor.js",
+    "janitor": "./bin/repo-janitor.js"
+  },
+  "keywords": [
+    "codebase-intelligence",
+    "linter",
+    "dead-code",
+    "code-clones",
+    "audit",
+    "axi",
+    "agent-tools"
+  ],
+  "author": "ashmi",
+  "license": "MIT"
+}

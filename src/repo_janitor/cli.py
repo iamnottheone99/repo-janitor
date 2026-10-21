@@ -11,7 +11,7 @@ from rich.table import Table
 
 from repo_janitor.config import JanitorConfig
 from repo_janitor.maintainer import MaintenanceSummary, RepoMaintainer
-from repo_janitor.scanner import ScanReport
+from repo_janitor.scanner import AuditReport, RepoScanner, ScanReport
 from repo_janitor.worktree import GitWorktreeManager
 
 app = typer.Typer(
@@ -69,29 +69,63 @@ def _format_toon_summary(summary: MaintenanceSummary) -> str:
     return "\n".join(lines)
 
 
+def _format_toon_audit(report: AuditReport) -> str:
+    """Format audit findings (Errors, Gaps, Redundancies) in AXI TOON format."""
+    lines = [
+        f"repo: {report.repo_root.as_posix()}",
+        f"summary: {len(report.errors)} errors, {len(report.gaps)} gaps, {len(report.redundancies)} redundancies across {report.total_files} files",
+    ]
+    for cat_name, findings in (("errors", report.errors), ("gaps", report.gaps), ("redundancies", report.redundancies)):
+        if not findings:
+            lines.append(f"{cat_name}: 0 findings")
+        else:
+            lines.append(f"{cat_name}[{len(findings)}]{{kind,file,line,conf,actionable,rec}}:")
+            for f in findings:
+                rel = f" -> {f.related_file}:{f.related_line}" if f.related_file else ""
+                lines.append(f"  {f.kind},{f.file_path}:{f.line}{rel},{f.confidence:.2f},{str(f.is_actionable).lower()},{f.recommendation}")
+    return "\n".join(lines)
+
+
 @app.command("init")
 def init_config(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
     model: str = typer.Option("qwen2.5-coder:7b", "--model", "-m", help="Local Ollama model name"),
     host: str = typer.Option("http://localhost:11434", "--host", help="Ollama server URL"),
+    language: str = typer.Option(
+        "auto",
+        "--language",
+        "-l",
+        help="Repository language: auto | python | typescript | javascript | go | rust",
+    ),
 ) -> None:
     """Initialize a .janitor.json configuration file in the target repository."""
+    from repo_janitor.languages import detect_repo_language, get_language_adapter
+
     repo_root = repo.resolve()
     cfg = JanitorConfig.load(repo_root)
     cfg.model = model
     cfg.ollama_host = host
+    cfg.language = language
+    detected = language if language != "auto" else detect_repo_language(repo_root)
+    cfg.test_command = get_language_adapter(detected).default_test_command
     saved_path = cfg.save(repo_root)
-    typer.echo(f"config: initialized {saved_path.as_posix()} (model={cfg.model})")
+    typer.echo(
+        f"config: initialized {saved_path.as_posix()} "
+        f"(model={cfg.model}, language={cfg.language}, test_command={cfg.test_command})"
+    )
 
 
 @app.command("scan")
 def scan_repo(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
+    language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     toon: bool = typer.Option(False, "--toon", help="Emit AXI token-efficient TOON output"),
 ) -> None:
-    """Scan repository AST and test suite for missing docstrings and uncovered functions."""
+    """Scan repository source and test suite for missing docstrings and uncovered functions."""
     repo_root = repo.resolve()
     cfg = JanitorConfig.load(repo_root)
+    if language:
+        cfg.language = language
     maintainer = RepoMaintainer(repo_root, cfg)
     report = maintainer.scan()
 
@@ -109,9 +143,10 @@ def scan_repo(
         doc_table.add_column("File", style="cyan")
         doc_table.add_column("Symbol", style="yellow")
         doc_table.add_column("Kind")
+        doc_table.add_column("Language")
         doc_table.add_column("Line", justify="right")
         for s in report.missing_docstrings:
-            doc_table.add_row(s.file_path, s.qualified_name, s.kind, str(s.start_line))
+            doc_table.add_row(s.file_path, s.qualified_name, s.kind, s.language, str(s.start_line))
         console.print(doc_table)
     else:
         console.print("[green]✓ All public symbols have docstrings.[/green]")
@@ -120,9 +155,10 @@ def scan_repo(
         test_table = Table(title=f"Untested Functions ({len(report.untested_functions)})")
         test_table.add_column("File", style="cyan")
         test_table.add_column("Function / Method", style="magenta")
+        test_table.add_column("Language")
         test_table.add_column("Signature")
         for s in report.untested_functions:
-            test_table.add_row(s.file_path, s.qualified_name, s.signature)
+            test_table.add_row(s.file_path, s.qualified_name, s.language, s.signature)
         console.print(test_table)
     else:
         console.print("[green]✓ All public functions are covered by tests.[/green]")
@@ -138,6 +174,7 @@ def scan_repo(
 def generate_docstrings(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Override Ollama model"),
+    language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max tasks to run"),
     no_readme: bool = typer.Option(False, "--no-readme", help="Skip README.md sync"),
     toon: bool = typer.Option(False, "--toon", help="Emit AXI TOON output"),
@@ -147,6 +184,8 @@ def generate_docstrings(
     cfg = JanitorConfig.load(repo_root)
     if model:
         cfg.model = model
+    if language:
+        cfg.language = language
     maintainer = RepoMaintainer(repo_root, cfg)
     summary = maintainer.run_docstring_tasks(limit=limit, include_readme=not no_readme)
     _render_summary(summary, toon=toon)
@@ -156,6 +195,7 @@ def generate_docstrings(
 def generate_tests(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Override Ollama model"),
+    language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max functions to test"),
     toon: bool = typer.Option(False, "--toon", help="Emit AXI TOON output"),
 ) -> None:
@@ -164,6 +204,8 @@ def generate_tests(
     cfg = JanitorConfig.load(repo_root)
     if model:
         cfg.model = model
+    if language:
+        cfg.language = language
     maintainer = RepoMaintainer(repo_root, cfg)
     summary = maintainer.run_unit_test_tasks(limit=limit)
     _render_summary(summary, toon=toon)
@@ -173,6 +215,7 @@ def generate_tests(
 def run_all(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
     model: Optional[str] = typer.Option(None, "--model", "-m", help="Override Ollama model"),
+    language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max total tasks to run"),
     toon: bool = typer.Option(False, "--toon", help="Emit AXI TOON output"),
 ) -> None:
@@ -181,6 +224,8 @@ def run_all(
     cfg = JanitorConfig.load(repo_root)
     if model:
         cfg.model = model
+    if language:
+        cfg.language = language
     maintainer = RepoMaintainer(repo_root, cfg)
     summary = maintainer.run_all(limit=limit)
     _render_summary(summary, toon=toon)
@@ -267,6 +312,103 @@ def _render_summary(summary: MaintenanceSummary, toon: bool = False) -> None:
             o.detail,
         )
     console.print(table)
+
+
+def _render_audit(report: AuditReport, toon: bool = False) -> None:
+    if toon:
+        typer.echo(_format_toon_audit(report))
+        return
+
+    console.print(
+        f"\n[bold cyan]Repo Audit:[/bold cyan] {report.repo_root} "
+        f"({report.total_files} files, {report.total_symbols} symbols)"
+    )
+    console.print(
+        f"Summary: [bold red]{len(report.errors)} errors[/bold red], "
+        f"[bold yellow]{len(report.gaps)} gaps[/bold yellow], "
+        f"[bold magenta]{len(report.redundancies)} redundancies[/bold magenta]\n"
+    )
+
+    if report.errors:
+        err_table = Table(title="Errors (Syntax, Broken Imports, Empty Exceptions)")
+        err_table.add_column("Kind", style="red")
+        err_table.add_column("Location", style="cyan")
+        err_table.add_column("Issue", style="yellow")
+        err_table.add_column("Conf", justify="right")
+        err_table.add_column("Recommendation")
+        for f in report.errors:
+            err_table.add_row(f.kind, f"{f.file_path}:{f.line}", f.title, f"{f.confidence:.2f}", f.recommendation)
+        console.print(err_table)
+
+    if report.gaps:
+        gap_table = Table(title="Gaps (Unfinished Stubs, Untested Functions)")
+        gap_table.add_column("Kind", style="yellow")
+        gap_table.add_column("Location", style="cyan")
+        gap_table.add_column("Target", style="magenta")
+        gap_table.add_column("Conf", justify="right")
+        gap_table.add_column("Recommendation")
+        for f in report.gaps:
+            gap_table.add_row(f.kind, f"{f.file_path}:{f.line}", f.title, f"{f.confidence:.2f}", f.recommendation)
+        console.print(gap_table)
+
+    if report.redundancies:
+        red_table = Table(title="Redundancies (Code Clones, Dead Symbols)")
+        red_table.add_column("Kind", style="magenta")
+        red_table.add_column("Location", style="cyan")
+        red_table.add_column("Details", style="yellow")
+        red_table.add_column("Related File", style="blue")
+        red_table.add_column("Conf", justify="right")
+        red_table.add_column("Recommendation")
+        for f in report.redundancies:
+            related = f"{f.related_file}:{f.related_line}" if f.related_file else "-"
+            red_table.add_row(f.kind, f"{f.file_path}:{f.line}", f.title, related, f"{f.confidence:.2f}", f.recommendation)
+        console.print(red_table)
+
+    if not report.total_findings:
+        console.print("[green]✓ Repository is clean: 0 errors, 0 gaps, 0 redundancies found.[/green]\n")
+
+
+@app.command("check")
+def check_repo(
+    repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
+    classifier: str = typer.Option(
+        "fast",
+        "--classifier",
+        "-c",
+        help="Classifier decision model: fast | kev | ollama",
+    ),
+    language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
+    strict: bool = typer.Option(False, "--strict", help="Exit with code 1 if errors are found (ideal for CI)"),
+    toon: bool = typer.Option(False, "--toon", help="Emit AXI token-efficient TOON output"),
+) -> None:
+    """Audit repository for Errors, Gaps, and Duplicates/Redundancies using a decision classifier."""
+    repo_root = repo.resolve()
+    cfg = JanitorConfig.load(repo_root)
+    cfg.classifier_model = classifier
+    if language:
+        cfg.language = language
+    scanner = RepoScanner(repo_root, cfg)
+    report = scanner.audit()
+    _render_audit(report, toon=toon)
+    if strict and report.errors:
+        raise typer.Exit(code=1)
+
+
+@app.command("audit")
+def audit_repo(
+    repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
+    classifier: str = typer.Option(
+        "fast",
+        "--classifier",
+        "-c",
+        help="Classifier decision model: fast | kev | ollama",
+    ),
+    language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
+    strict: bool = typer.Option(False, "--strict", help="Exit with code 1 if errors are found (ideal for CI)"),
+    toon: bool = typer.Option(False, "--toon", help="Emit AXI token-efficient TOON output"),
+) -> None:
+    """Alias for 'check': audit repo for Errors, Gaps, and Redundancies."""
+    check_repo(repo=repo, classifier=classifier, language=language, strict=strict, toon=toon)
 
 
 if __name__ == "__main__":

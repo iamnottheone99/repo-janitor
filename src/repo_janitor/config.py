@@ -35,6 +35,33 @@ class JanitorConfig:
     )
     include_private_symbols: bool = False
     max_tasks_per_run: int = 5
+    language: str = "auto"
+    similarity_threshold: float = 0.85
+    min_clone_lines: int = 3
+    classifier_model: str = "fast"
+
+    def effective_test_command(self, repo_root: Path) -> str:
+        """Resolve the test runner command for the repository."""
+        from repo_janitor.languages import detect_repo_language, get_language_adapter
+
+        if self.test_command and self.test_command != "auto":
+            # If default 'pytest -q' is still set on a non-Python repo, adapt automatically
+            if self.test_command == "pytest -q":
+                lang = (
+                    self.language
+                    if self.language != "auto"
+                    else detect_repo_language(repo_root)
+                )
+                if lang != "python":
+                    return get_language_adapter(lang).default_test_command
+            return self.test_command
+
+        lang = (
+            self.language
+            if self.language != "auto"
+            else detect_repo_language(repo_root)
+        )
+        return get_language_adapter(lang).default_test_command
 
     @classmethod
     def load(cls, repo_root: Path) -> JanitorConfig:

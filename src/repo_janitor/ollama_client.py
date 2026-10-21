@@ -109,18 +109,21 @@ class OllamaClient:
             ) from exc
 
     def generate_docstring(self, symbol: CodeSymbol) -> str:
-        """Generate a clean PEP 257 docstring for a function, method, or class."""
+        """Generate a clean documentation comment/docstring for a function, method, or class."""
+        from repo_janitor.languages import get_language_adapter
+
+        adapter = get_language_adapter(symbol.language)
         system_prompt = (
-            "You are an expert Python documentation assistant. "
-            "Write a clear, concise PEP 257 docstring for the provided Python symbol. "
-            "Return ONLY the raw docstring text itself (do not wrap in code fences, "
-            "do not repeat the function definition, and do not include triple quotes)."
+            f"You are an expert {adapter.display_name} documentation assistant. "
+            f"Write a clear, concise {adapter.doc_style} for the provided {adapter.display_name} symbol. "
+            "Return ONLY the raw documentation text itself (do not wrap in code fences, "
+            "do not repeat the declaration, and do not include outer comment delimiters or triple quotes)."
         )
         user_prompt = (
             f"File: {symbol.file_path}\n"
             f"Symbol ({symbol.kind}): {symbol.qualified_name}\n\n"
-            f"Source code:\n```python\n{symbol.source_code}\n```\n\n"
-            "Write the docstring content:"
+            f"Source code:\n```{adapter.code_fence}\n{symbol.source_code}\n```\n\n"
+            "Write the documentation content:"
         )
         raw = self._chat(system_prompt, user_prompt).strip()
         cleaned = self._strip_code_fences(raw).strip()
@@ -134,27 +137,30 @@ class OllamaClient:
         full_file_source: str,
         previous_error: str | None = None,
     ) -> str:
-        """Generate a self-contained pytest module for an uncovered function/method."""
+        """Generate a self-contained unit test module for an uncovered function/method."""
+        from repo_janitor.languages import get_language_adapter
+
+        adapter = get_language_adapter(symbol.language)
         system_prompt = (
-            "You are an expert Python test engineer. "
-            "Write a self-contained pytest test file for the target symbol. "
-            "Output ONLY valid Python code inside a ```python ... ``` block. "
+            f"You are an expert {adapter.display_name} test engineer. "
+            f"Write a self-contained {adapter.test_framework} test file for the target symbol. "
+            f"Output ONLY valid {adapter.display_name} code inside a ```{adapter.code_fence} ... ``` block. "
             "Do not use external network calls; mock I/O if needed."
         )
         retry_context = ""
         if previous_error:
             retry_context = (
-                f"\nYour previous test attempt failed with this pytest error:\n"
-                f"```\n{previous_error}\n```\nFix the test so that pytest passes.\n"
+                f"\nYour previous test attempt failed with this test runner error:\n"
+                f"```\n{previous_error}\n```\nFix the test so that `{adapter.default_test_command}` passes.\n"
             )
 
         user_prompt = (
             f"Target file: {symbol.file_path}\n"
-            f"Import path: `{module_import_path}`\n"
+            f"Import / package target: `{module_import_path}`\n"
             f"Target symbol ({symbol.kind}): `{symbol.qualified_name}`\n\n"
-            f"Full module source:\n```python\n{full_file_source}\n```\n"
+            f"Full module source:\n```{adapter.code_fence}\n{full_file_source}\n```\n"
             f"{retry_context}\n"
-            f"Write a pytest file that imports from `{module_import_path}` and thoroughly "
+            f"Write a {adapter.test_framework} file that imports/uses `{module_import_path}` and thoroughly "
             f"tests `{symbol.qualified_name}`."
         )
         raw = self._chat(system_prompt, user_prompt)
@@ -168,7 +174,7 @@ class OllamaClient:
     ) -> str:
         """Generate or update README.md with documentation for undocumented modules."""
         system_prompt = (
-            "You are a technical writer maintaining a Python repository README.md. "
+            "You are a technical writer maintaining a software repository README.md. "
             "Return the complete updated Markdown for README.md."
         )
         summary_lines = "\n".join(
@@ -186,7 +192,11 @@ class OllamaClient:
     @staticmethod
     def _strip_code_fences(text: str) -> str:
         """Extract content inside markdown code fences if present."""
-        match = re.search(r"```(?:python|markdown|md)?\s*\n(.*?)```", text, re.DOTALL)
+        match = re.search(
+            r"```(?:python|typescript|ts|javascript|js|go|golang|rust|rs|markdown|md)?\s*\n(.*?)```",
+            text,
+            re.DOTALL,
+        )
         if match:
             return match.group(1).strip()
         return text.strip()
