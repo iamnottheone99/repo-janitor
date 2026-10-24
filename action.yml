@@ -43,16 +43,22 @@ runs:
 
     - name: Run Repo Janitor
       shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_CLASSIFIER: ${{ inputs.classifier }}
+        INPUT_LANGUAGE: ${{ inputs.language }}
+        INPUT_STRICT: ${{ inputs.strict }}
+        INPUT_FORMAT: ${{ inputs.format }}
       run: |
-        EXTRA_FLAGS=""
-        if [ "${{ inputs.format }}" = "toon" ]; then
-          EXTRA_FLAGS="$EXTRA_FLAGS --toon"
+        EXTRA_FLAGS=()
+        if [ "$INPUT_FORMAT" = "toon" ]; then
+          EXTRA_FLAGS+=("--toon")
         fi
-        if [ "${{ inputs.language }}" != "auto" ]; then
-          EXTRA_FLAGS="$EXTRA_FLAGS --language ${{ inputs.language }}"
+        if [ "$INPUT_LANGUAGE" != "auto" ]; then
+          EXTRA_FLAGS+=("--language" "$INPUT_LANGUAGE")
         fi
-        if [ "${{ inputs.strict }}" = "true" ]; then
-          EXTRA_FLAGS="$EXTRA_FLAGS --strict"
+        if [ "$INPUT_STRICT" = "true" ]; then
+          EXTRA_FLAGS+=("--strict")
         fi
 
-        janitor ${{ inputs.command }} --classifier ${{ inputs.classifier }} $EXTRA_FLAGS
+        janitor "$INPUT_COMMAND" --classifier "$INPUT_CLASSIFIER" "${EXTRA_FLAGS[@]}"

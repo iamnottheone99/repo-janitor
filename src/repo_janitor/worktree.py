@@ -71,8 +71,10 @@ class GitWorktreeManager:
         wt_base = (self.repo_root / self.config.worktree_dir).resolve()
         wt_base.mkdir(parents=True, exist_ok=True)
 
-        safe_dir_name = branch_name.replace("/", "__")
-        wt_path = wt_base / safe_dir_name
+        safe_dir_name = re.sub(r"[^A-Za-z0-9_.-]", "_", branch_name)
+        wt_path = (wt_base / safe_dir_name).resolve()
+        if not wt_path.is_relative_to(wt_base):
+            raise ValueError(f"Insecure worktree path attempted: {wt_path}")
 
         # Clean up any leftover worktree or branch from an interrupted previous run
         self._cleanup_worktree(wt_path)
@@ -101,11 +103,12 @@ class GitWorktreeManager:
                 os.symlink(host_nm, wt_nm, target_is_directory=True)
             except OSError:
                 if sys.platform == "win32":
-                    subprocess.run(
-                        ["cmd", "/c", "mklink", "/J", str(wt_nm), str(host_nm)],
-                        capture_output=True,
-                        check=False,
-                    )
+                    try:
+                        import _winapi
+
+                        _winapi.CreateJunction(str(host_nm), str(wt_nm))
+                    except Exception:
+                        pass
 
     def _unlink_shared_dependencies(self, worktree_path: Path) -> None:
         """Safely detach linked node_modules before deleting the worktree directory."""
@@ -113,11 +116,10 @@ class GitWorktreeManager:
         if wt_nm.is_symlink():
             wt_nm.unlink(missing_ok=True)
         elif wt_nm.exists() and sys.platform == "win32":
-            subprocess.run(
-                ["cmd", "/c", "rmdir", str(wt_nm)],
-                capture_output=True,
-                check=False,
-            )
+            try:
+                os.rmdir(wt_nm)
+            except OSError:
+                pass
 
     def run_tests(self, worktree_path: Path) -> VerificationResult:
         """Execute the configured or auto-detected test suite inside the isolated worktree."""
@@ -130,6 +132,18 @@ class GitWorktreeManager:
         env["PYTHONPATH"] = os.pathsep.join(py_paths)
 
         cmd = self.config.effective_test_command(worktree_path)
+        try:
+            from repo_janitor.security import validate_test_command_safety
+
+            validate_test_command_safety(cmd)
+        except ValueError as sec_err:
+            return VerificationResult(
+                passed=False,
+                exit_code=-1,
+                stdout="",
+                stderr=f"Security check rejected test command: {sec_err}",
+            )
+
         # Ensure pytest runs under the active Python interpreter for reliability
         if cmd.startswith("pytest"):
             cmd = f'"{sys.executable}" -m {cmd}'

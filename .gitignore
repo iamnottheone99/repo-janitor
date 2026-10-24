@@ -10,3 +10,6 @@ build/
 .coverage
 coverage.json
 .janitor/
+.janitor.json
+.env
+.env.*

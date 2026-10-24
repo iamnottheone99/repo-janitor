@@ -10,6 +10,7 @@ from repo_janitor.config import JanitorConfig
 from repo_janitor.languages import get_language_adapter
 from repo_janitor.ollama_client import LLMGenerator, OllamaClient
 from repo_janitor.scanner import CodeSymbol, RepoScanner, ScanReport
+from repo_janitor.security import SecurityValidationError, validate_generated_code_safety
 from repo_janitor.worktree import GitWorktreeManager
 
 
@@ -266,6 +267,20 @@ class RepoMaintainer:
                         full_file_source=full_source,
                         previous_error=last_error,
                     )
+                    # Pre-execution AST security verification to block malicious prompt injections
+                    try:
+                        validate_generated_code_safety(test_code, language=sym.language)
+                    except SecurityValidationError as sec_err:
+                        return TaskOutcome(
+                            task_type="unit_test",
+                            target=sym.qualified_name,
+                            file_path=test_rel_path,
+                            status="error",
+                            branch=branch,
+                            attempts=attempt,
+                            detail=f"Security check rejected generated test: {sec_err}",
+                        )
+
                     test_file_path.write_text(test_code.strip() + "\n", encoding="utf-8")
 
                     verification = self.worktrees.run_tests(wt_path)

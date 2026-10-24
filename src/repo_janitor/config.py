@@ -57,10 +57,25 @@ class JanitorConfig:
         return self.ollama_host.rstrip("/")
 
     def effective_api_key(self) -> str:
-        """Resolve the API key for OpenAI-compliant endpoints."""
+        """Resolve the API key for OpenAI-compliant endpoints safely without leaking to arbitrary hosts."""
         import os
+        from urllib.parse import urlparse
 
-        return self.api_key or os.environ.get("OPENAI_API_KEY", "")
+        if self.api_key:
+            return self.api_key
+
+        base = self.effective_api_base()
+        hostname = (urlparse(base).hostname or "").lower()
+
+        # Local servers (Ollama, vLLM, LM Studio) do not require ambient OpenAI keys
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return ""
+
+        # Only forward ambient OPENAI_API_KEY to verified OpenAI/OpenRouter domains or openai provider
+        if self.provider.lower() in ("openai", "openrouter") or hostname.endswith(("openai.com", "openrouter.ai")):
+            return os.environ.get("OPENAI_API_KEY", "")
+
+        return ""
 
     def effective_test_command(self, repo_root: Path) -> str:
         """Resolve the test runner command for the repository."""
@@ -100,9 +115,13 @@ class JanitorConfig:
             return cls()
 
     def save(self, repo_root: Path) -> Path:
-        """Persist configuration to .janitor.json in repo_root."""
+        """Persist configuration to .janitor.json in repo_root without plaintext secrets."""
         config_path = repo_root / ".janitor.json"
+        data = asdict(self)
+        # Redact raw secrets from persisted repository config; users should use OPENAI_API_KEY
+        if data.get("api_key"):
+            data["api_key"] = ""
         config_path.write_text(
-            json.dumps(asdict(self), indent=2) + "\n", encoding="utf-8"
+            json.dumps(data, indent=2) + "\n", encoding="utf-8"
         )
         return config_path

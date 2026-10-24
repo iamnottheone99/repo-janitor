@@ -104,6 +104,14 @@ class OllamaClient:
         headers = {"Content-Type": "application/json"}
         api_key = self.config.effective_api_key()
         if api_key:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            hostname = (parsed.hostname or "").lower()
+            if parsed.scheme == "http" and hostname not in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+                raise ValueError(
+                    f"Insecure transport blocked: cannot transmit API key over plaintext HTTP to '{hostname}'. Use HTTPS."
+                )
             headers["Authorization"] = f"Bearer {api_key}"
 
         payload = json.dumps(
