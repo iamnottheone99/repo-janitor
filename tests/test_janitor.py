@@ -493,5 +493,95 @@ def test_brace_matcher_ignores_braces_in_string_literals() -> None:
     assert end_line == 5
 
 
+def test_config_effective_api_base_and_key() -> None:
+    """Verify provider defaults for Ollama, vLLM, LM Studio, and OpenAI."""
+    cfg_ollama = JanitorConfig(provider="ollama")
+    assert cfg_ollama.effective_api_base() == "http://localhost:11434"
+
+    cfg_vllm = JanitorConfig(provider="vllm")
+    assert cfg_vllm.effective_api_base() == "http://localhost:8000/v1"
+
+    cfg_lmstudio = JanitorConfig(provider="lmstudio")
+    assert cfg_lmstudio.effective_api_base() == "http://localhost:1234/v1"
+
+    cfg_openai = JanitorConfig(provider="openai", api_key="sk-test-key")
+    assert cfg_openai.effective_api_base() == "https://api.openai.com/v1"
+    assert cfg_openai.effective_api_key() == "sk-test-key"
+
+    cfg_custom = JanitorConfig(provider="vllm", api_base="http://192.168.1.100:9000/v1")
+    assert cfg_custom.effective_api_base() == "http://192.168.1.100:9000/v1"
+
+
+def test_llm_client_openai_compatible_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify OllamaClient correctly calls OpenAI-compliant chat completions endpoint."""
+    import io
+    import json
+    import urllib.request
+    from repo_janitor.ollama_client import OllamaClient
+
+    captured_req: list[urllib.request.Request] = []
+
+    class FakeResponse:
+        def __init__(self, data: bytes) -> None:
+            self._data = data
+            self.status = 200
+
+        def read(self) -> bytes:
+            return self._data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        captured_req.append(req)
+        resp_json = json.dumps({
+            "choices": [
+                {"message": {"role": "assistant", "content": "Generated documentation."}}
+            ]
+        }).encode("utf-8")
+        return FakeResponse(resp_json)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    cfg = JanitorConfig(provider="vllm", model="meta-llama/Llama-3-8B-Instruct", api_key="test-secret")
+    client = OllamaClient(cfg)
+    reply = client._chat("You are helpful.", "Write docs.")
+
+    assert reply == "Generated documentation."
+    assert len(captured_req) == 1
+    req = captured_req[0]
+    assert req.full_url == "http://localhost:8000/v1/chat/completions"
+    assert req.headers.get("Authorization") == "Bearer test-secret"
+    payload = json.loads(req.data.decode("utf-8"))
+    assert payload["model"] == "meta-llama/Llama-3-8B-Instruct"
+    assert payload["messages"][0]["content"] == "You are helpful."
+
+
+def test_cli_init_with_provider_and_custom_host(tmp_path: Path) -> None:
+    """Verify janitor init persists provider and endpoint configuration."""
+    from typer.testing import CliRunner
+    from repo_janitor.cli import app
+
+    runner = CliRunner()
+    res = runner.invoke(app, [
+        "init",
+        "--repo", str(tmp_path),
+        "--provider", "lmstudio",
+        "--model", "qwen2.5-coder-7b-instruct",
+        "--host", "http://localhost:1234/v1",
+    ])
+    assert res.exit_code == 0
+    assert "provider=lmstudio" in res.output
+
+    cfg = JanitorConfig.load(tmp_path)
+    assert cfg.provider == "lmstudio"
+    assert cfg.model == "qwen2.5-coder-7b-instruct"
+    assert cfg.effective_api_base() == "http://localhost:1234/v1"
+
+
+
 
 

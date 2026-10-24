@@ -154,8 +154,10 @@ Customize repository settings by placing `.janitor.json` in your repository root
 ```json
 {
   "language": "auto",
+  "provider": "ollama",
   "model": "qwen2.5-coder:7b",
-  "ollama_host": "http://localhost:11434",
+  "api_base": "http://localhost:11434",
+  "api_key": "",
   "classifier_model": "fast",
   "temperature": 0.1,
   "max_retries": 2,
@@ -170,6 +172,17 @@ Customize repository settings by placing `.janitor.json` in your repository root
   "max_tasks_per_run": 5
 }
 ```
+
+### LLM Provider Quick Reference
+
+`repo-janitor` supports any OpenAI-compliant API or local runner:
+
+| Provider | `provider` | Default `api_base` | CLI Quickstart |
+| :--- | :--- | :--- | :--- |
+| **Ollama** (Local) | `ollama` | `http://localhost:11434` | `janitor init --provider ollama --model qwen2.5-coder:7b` |
+| **LM Studio** (Local) | `lmstudio` | `http://localhost:1234/v1` | `janitor init --provider lmstudio --model qwen2.5-coder-7b-instruct` |
+| **vLLM** (Local/Cluster) | `vllm` | `http://localhost:8000/v1` | `janitor init --provider vllm --model meta-llama/Llama-3-8B-Instruct` |
+| **OpenAI / Compatible** | `openai` | `https://api.openai.com/v1` | `janitor init --provider openai --model gpt-4o-mini --api-key $OPENAI_API_KEY` |
 
 ---
 

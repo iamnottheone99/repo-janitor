@@ -12,6 +12,9 @@ class JanitorConfig:
     """Configuration for autonomous repository maintenance runs."""
 
     model: str = "qwen2.5-coder:7b"
+    provider: str = "ollama"  # "ollama" | "openai" | "vllm" | "lmstudio"
+    api_base: str = ""        # Custom base URL (e.g. http://localhost:1234/v1, http://localhost:8000/v1)
+    api_key: str = ""         # Optional API key for OpenAI-compliant endpoints
     ollama_host: str = "http://localhost:11434"
     temperature: float = 0.1
     max_retries: int = 2
@@ -39,6 +42,25 @@ class JanitorConfig:
     similarity_threshold: float = 0.85
     min_clone_lines: int = 3
     classifier_model: str = "fast"
+
+    def effective_api_base(self) -> str:
+        """Resolve the base endpoint URL for the configured LLM provider."""
+        if self.api_base:
+            return self.api_base.rstrip("/")
+        prov = self.provider.lower()
+        if prov == "vllm":
+            return "http://localhost:8000/v1"
+        if prov == "lmstudio":
+            return "http://localhost:1234/v1"
+        if prov in ("openai", "openrouter"):
+            return "https://api.openai.com/v1"
+        return self.ollama_host.rstrip("/")
+
+    def effective_api_key(self) -> str:
+        """Resolve the API key for OpenAI-compliant endpoints."""
+        import os
+
+        return self.api_key or os.environ.get("OPENAI_API_KEY", "")
 
     def effective_test_command(self, repo_root: Path) -> str:
         """Resolve the test runner command for the repository."""

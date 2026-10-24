@@ -37,27 +37,44 @@ class LLMGenerator(Protocol):
 
 
 class OllamaClient:
-    """Interacts with a local Ollama instance via SDK or HTTP API."""
+    """Interacts with local model runners (Ollama, vLLM, LM Studio) or OpenAI-compatible APIs."""
 
     def __init__(self, config: JanitorConfig) -> None:
         self.config = config
 
     def is_available(self) -> bool:
-        """Check if the local Ollama server is reachable."""
-        url = f"{self.config.ollama_host.rstrip('/')}/api/tags"
+        """Check if the configured LLM server is reachable."""
+        provider = self.config.provider.lower()
+        base = self.config.effective_api_base()
+        headers = {}
+        api_key = self.config.effective_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        if provider == "ollama":
+            url = f"{base}/api/tags"
+        else:
+            url = f"{base}/models" if base.endswith("/v1") else f"{base}/v1/models"
+
         try:
-            req = urllib.request.Request(url, method="GET")
+            req = urllib.request.Request(url, headers=headers, method="GET")
             with urllib.request.urlopen(req, timeout=3.0) as resp:
-                return resp.status == 200
+                return resp.status in (200, 204)
         except (urllib.error.URLError, TimeoutError, OSError):
             return False
 
     def _chat(self, system_prompt: str, user_prompt: str) -> str:
-        """Send a chat completion request to Ollama."""
+        """Send a chat completion request to the configured LLM provider."""
+        provider = self.config.provider.lower()
+        if provider in ("openai", "vllm", "lmstudio"):
+            return self._openai_chat(system_prompt, user_prompt)
+
+        # Default provider: Ollama (try SDK if installed, fallback to HTTP /api/chat)
+        host = self.config.effective_api_base()
         try:
             import ollama  # type: ignore
 
-            client = ollama.Client(host=self.config.ollama_host)
+            client = ollama.Client(host=host)
             response = client.chat(
                 model=self.config.model,
                 messages=[
@@ -73,10 +90,52 @@ class OllamaClient:
             # Fallback to direct HTTP request if SDK call or import fails
             return self._http_chat(system_prompt, user_prompt, prev_exc=exc)
 
+    def _openai_chat(
+        self, system_prompt: str, user_prompt: str, prev_exc: Exception | None = None
+    ) -> str:
+        base = self.config.effective_api_base()
+        if base.endswith("/chat/completions"):
+            url = base
+        elif base.endswith("/v1"):
+            url = f"{base}/chat/completions"
+        else:
+            url = f"{base}/v1/chat/completions"
+
+        headers = {"Content-Type": "application/json"}
+        api_key = self.config.effective_api_key()
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        payload = json.dumps(
+            {
+                "model": self.config.model,
+                "stream": False,
+                "temperature": self.config.temperature,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=90.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                choices = data.get("choices", [])
+                if choices:
+                    return choices[0].get("message", {}).get("content", "")
+                return ""
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                f"Cannot reach {self.config.provider} API at {url} "
+                f"(model={self.config.model}): {prev_exc or exc}"
+            ) from exc
+
     def _http_chat(
         self, system_prompt: str, user_prompt: str, prev_exc: Exception | None = None
     ) -> str:
-        url = f"{self.config.ollama_host.rstrip('/')}/api/chat"
+        host = self.config.effective_api_base()
+        url = f"{host}/api/chat"
         payload = json.dumps(
             {
                 "model": self.config.model,
@@ -100,7 +159,7 @@ class OllamaClient:
                 return data.get("message", {}).get("content", "")
         except urllib.error.URLError as exc:
             raise RuntimeError(
-                f"Cannot reach Ollama at {self.config.ollama_host} "
+                f"Cannot reach Ollama at {host} "
                 f"(model={self.config.model}): {prev_exc or exc}"
             ) from exc
 
@@ -196,3 +255,6 @@ class OllamaClient:
         if match:
             return match.group(1).strip()
         return text.strip()
+
+
+LLMClient = OllamaClient

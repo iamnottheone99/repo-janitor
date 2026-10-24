@@ -89,8 +89,15 @@ def _format_toon_audit(report: AuditReport) -> str:
 @app.command("init")
 def init_config(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
-    model: str = typer.Option("qwen2.5-coder:7b", "--model", "-m", help="Local Ollama model name"),
-    host: str = typer.Option("http://localhost:11434", "--host", help="Ollama server URL"),
+    provider: str = typer.Option(
+        "ollama",
+        "--provider",
+        "-p",
+        help="LLM provider: ollama | openai | vllm | lmstudio",
+    ),
+    model: str = typer.Option("qwen2.5-coder:7b", "--model", "-m", help="Model name"),
+    host: Optional[str] = typer.Option(None, "--host", help="Server URL or API base (e.g. http://localhost:1234/v1)"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="API key for OpenAI-compliant endpoints"),
     language: str = typer.Option(
         "auto",
         "--language",
@@ -103,15 +110,20 @@ def init_config(
 
     repo_root = repo.resolve()
     cfg = JanitorConfig.load(repo_root)
+    cfg.provider = provider
     cfg.model = model
-    cfg.ollama_host = host
+    if host:
+        cfg.api_base = host
+        cfg.ollama_host = host
+    if api_key:
+        cfg.api_key = api_key
     cfg.language = language
     detected = language if language != "auto" else detect_repo_language(repo_root)
     cfg.test_command = get_language_adapter(detected).default_test_command
     saved_path = cfg.save(repo_root)
     typer.echo(
         f"config: initialized {saved_path.as_posix()} "
-        f"(model={cfg.model}, language={cfg.language}, test_command={cfg.test_command})"
+        f"(provider={cfg.provider}, model={cfg.model}, endpoint={cfg.effective_api_base()}, language={cfg.language})"
     )
 
 
@@ -173,7 +185,9 @@ def scan_repo(
 @app.command("docstrings")
 def generate_docstrings(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override Ollama model"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="LLM provider: ollama | openai | vllm | lmstudio"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override LLM model"),
+    host: Optional[str] = typer.Option(None, "--host", help="Override server URL or API base"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max tasks to run"),
     no_readme: bool = typer.Option(False, "--no-readme", help="Skip README.md sync"),
@@ -182,8 +196,13 @@ def generate_docstrings(
     """Add missing docstrings and update README inside isolated `janitor/docs/*` worktrees."""
     repo_root = repo.resolve()
     cfg = JanitorConfig.load(repo_root)
+    if provider:
+        cfg.provider = provider
     if model:
         cfg.model = model
+    if host:
+        cfg.api_base = host
+        cfg.ollama_host = host
     if language:
         cfg.language = language
     maintainer = RepoMaintainer(repo_root, cfg)
@@ -194,7 +213,9 @@ def generate_docstrings(
 @app.command("tests")
 def generate_tests(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override Ollama model"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="LLM provider: ollama | openai | vllm | lmstudio"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override LLM model"),
+    host: Optional[str] = typer.Option(None, "--host", help="Override server URL or API base"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max functions to test"),
     toon: bool = typer.Option(False, "--toon", help="Emit AXI TOON output"),
@@ -202,8 +223,13 @@ def generate_tests(
     """Generate unit tests for uncovered functions inside isolated `janitor/tests/*` worktrees."""
     repo_root = repo.resolve()
     cfg = JanitorConfig.load(repo_root)
+    if provider:
+        cfg.provider = provider
     if model:
         cfg.model = model
+    if host:
+        cfg.api_base = host
+        cfg.ollama_host = host
     if language:
         cfg.language = language
     maintainer = RepoMaintainer(repo_root, cfg)
@@ -214,7 +240,9 @@ def generate_tests(
 @app.command("run")
 def run_all(
     repo: Path = typer.Option(Path("."), "--repo", "-r", help="Target git repository root"),
-    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override Ollama model"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="LLM provider: ollama | openai | vllm | lmstudio"),
+    model: Optional[str] = typer.Option(None, "--model", "-m", help="Override LLM model"),
+    host: Optional[str] = typer.Option(None, "--host", help="Override server URL or API base"),
     language: Optional[str] = typer.Option(None, "--language", "-l", help="Filter by language"),
     limit: Optional[int] = typer.Option(None, "--limit", "-n", help="Max total tasks to run"),
     toon: bool = typer.Option(False, "--toon", help="Emit AXI TOON output"),
@@ -222,8 +250,13 @@ def run_all(
     """Run full autonomous maintenance (docstrings + README + unit tests) in isolated worktrees."""
     repo_root = repo.resolve()
     cfg = JanitorConfig.load(repo_root)
+    if provider:
+        cfg.provider = provider
     if model:
         cfg.model = model
+    if host:
+        cfg.api_base = host
+        cfg.ollama_host = host
     if language:
         cfg.language = language
     maintainer = RepoMaintainer(repo_root, cfg)
