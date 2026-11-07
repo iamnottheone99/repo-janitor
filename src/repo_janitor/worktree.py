@@ -107,7 +107,7 @@ class GitWorktreeManager:
                         import _winapi
 
                         _winapi.CreateJunction(str(host_nm), str(wt_nm))
-                    except Exception:
+                    except OSError:
                         pass
 
     def _unlink_shared_dependencies(self, worktree_path: Path) -> None:

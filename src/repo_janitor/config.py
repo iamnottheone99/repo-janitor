@@ -72,7 +72,11 @@ class JanitorConfig:
             return ""
 
         # Only forward ambient OPENAI_API_KEY to verified OpenAI/OpenRouter domains or openai provider
-        if self.provider.lower() in ("openai", "openrouter") or hostname.endswith(("openai.com", "openrouter.ai")):
+        is_trusted_domain = (
+            hostname in ("api.openai.com", "openrouter.ai")
+            or hostname.endswith((".openai.com", ".openrouter.ai"))
+        )
+        if self.provider.lower() in ("openai", "openrouter") or is_trusted_domain:
             return os.environ.get("OPENAI_API_KEY", "")
 
         return ""

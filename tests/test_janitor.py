@@ -670,6 +670,10 @@ def test_security_ambient_openai_key_not_leaked_to_custom_host(monkeypatch: pyte
     cfg_openai = JanitorConfig(provider="openai")
     assert cfg_openai.effective_api_key() == "sk-ambient-secret"
 
+    # Substring collision host (e.g. notopenai.com) does not receive ambient key
+    cfg_collision = JanitorConfig(provider="vllm", api_base="https://notopenai.com/v1")
+    assert cfg_collision.effective_api_key() == ""
+
 
 
 

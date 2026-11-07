@@ -67,12 +67,14 @@ def validate_generated_code_safety(source: str, language: str = "python") -> Non
     else:
         dangerous_patterns = [
             (r"\bchild_process\b", "child_process execution"),
+            (r"\b(?:require|import)\s*\(?.*child_process", "child_process module import"),
             (r"\bos/exec\b", "Go os/exec execution"),
             (r"\bstd::process::Command\b", "Rust Command execution"),
             (r"\beval\s*\(", "eval() execution"),
+            (r"\bFunction\s*\(.*return", "Function constructor execution"),
         ]
         for pattern, desc in dangerous_patterns:
-            if re.search(pattern, source):
+            if re.search(pattern, source, re.IGNORECASE):
                 raise SecurityValidationError(f"Prohibited pattern in generated test: {desc}")
 
 
